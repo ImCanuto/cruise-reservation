@@ -1,0 +1,24 @@
+[
+    {
+      "id": "ITN001",
+      "destino": "Salvador",
+      "data_partida": "2025-06-10",
+      "navio": "Navio Bahiano",
+      "porto_embarque": "Salvador",
+      "porto_desembarque": "Salvador",
+      "lugares_visitados": ["Porto Seguro", "Morro de São Paulo"],
+      "noites": 5,
+      "valor_por_pessoa": 1500.00
+    },
+    {
+      "id": "ITN002",
+      "destino": "Rio de Janeiro",
+      "data_partida": "2025-07-20",
+      "navio": "Carioca Star",
+      "porto_embarque": "Rio de Janeiro",
+      "porto_desembarque": "Rio de Janeiro",
+      "lugares_visitados": ["Angra dos Reis", "Ilha Grande"],
+      "noites": 4,
+      "valor_por_pessoa": 1800.00
+    }
+  ]
