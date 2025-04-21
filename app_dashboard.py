@@ -1,31 +1,52 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, Input
-from textual.containers import Container, Horizontal
-from textual.reactive import reactive
 from rich.panel import Panel
 import pika, json, threading, time
 from collections import deque
 
 RABBIT_HOST = "localhost"
 
-promos = deque(maxlen=10)
-payments = deque(maxlen=10)
-logs = deque(maxlen=5)
+# estado global
+data = {
+    'reservas': {},       # reserva_id → {'payment': 'Aprovado'/'Recusado'/None, 'ticket': (id,destino)/None}
+    'promos': deque(maxlen=10)
+}
+logs = deque(maxlen=20)
 
 def add_log(msg):
     logs.appendleft(msg)
 
-class PromoWidget(Static):
+class ListWidget(Static):
+    def __init__(self, getter, title, **kw):
+        super().__init__(**kw)
+        self.getter = getter
+        self.title = title
     def render(self):
-        return Panel("\n".join(list(promos)), title="📢 Promoções")
+        items = self.getter() or ["(vazio)"]
+        return Panel("\n".join(items), title=self.title)
 
-class PaymentWidget(Static):
-    def render(self):
-        return Panel("\n".join(list(payments)), title="💳 Pagamentos")
+class PromoWidget(ListWidget):
+    def __init__(self): super().__init__(lambda: list(data['promos']), "📢 Promoções")
 
-class LogWidget(Static):
-    def render(self):
-        return Panel("\n".join(list(logs)), title="📘 Logs")
+class PaymentWidget(ListWidget):
+    def __init__(self):
+        def payments():
+            return [f"{rid}: {info['payment']}"
+                    for rid, info in data['reservas'].items()
+                    if info['payment'] is not None]
+        super().__init__(payments, "💳 Pagamentos")
+
+class TicketWidget(ListWidget):
+    def __init__(self):
+        def tickets():
+            return [f"{rid}: {tid} ({destino})"
+                    for rid, info in data['reservas'].items()
+                    if info['ticket'] is not None
+                    for tid, destino in [info['ticket']]]
+        super().__init__(tickets, "🎟️ Bilhetes")
+
+class LogWidget(ListWidget):
+    def __init__(self): super().__init__(lambda: list(logs), "📘 Logs")
 
 class ReservationInput(Input):
     placeholder = "reservar ITN001 2 1"
@@ -34,38 +55,26 @@ class CruiseDashboard(App):
     CSS_PATH = None
     BINDINGS = [("q", "quit", "Sair")]
 
-    promo: PromoWidget
-    payment: PaymentWidget
-    logs_panel: LogWidget
-    input_box: ReservationInput
-
     def compose(self) -> ComposeResult:
         yield Header()
-        with Container():
-            with Horizontal():
-                self.promo = PromoWidget()
-                self.payment = PaymentWidget()
-                self.logs_panel = LogWidget()
-                yield self.promo
-                yield self.payment
-                yield self.logs_panel
-            self.input_box = ReservationInput()
-            yield self.input_box
+        yield PromoWidget()
+        yield PaymentWidget()
+        yield TicketWidget()
+        yield LogWidget()
+        yield ReservationInput()
         yield Footer()
 
     def on_mount(self):
-        self.set_interval(1, self.refresh_views)
+        # refresca toda tela a cada 1s
+        self.set_interval(1, lambda: [w.refresh() for w in self.query(ListWidget)])
+        # threads de consumo
         threading.Thread(target=self.consume_promotions, daemon=True).start()
         threading.Thread(target=self.consume_payments, daemon=True).start()
+        threading.Thread(target=self.consume_tickets, daemon=True).start()
 
-    def refresh_views(self):
-        self.promo.refresh()
-        self.payment.refresh()
-        self.logs_panel.refresh()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    def on_input_submitted(self, event):
         cmd = event.value.strip()
-        self.input_box.value = ""
+        event.input.value = ""
         if cmd.startswith("reservar"):
             try:
                 _, itin, p, c = cmd.split()
@@ -76,51 +85,66 @@ class CruiseDashboard(App):
             add_log("❗ Comando desconhecido")
 
     def consume_promotions(self):
-        for dest in ["Salvador", "Rio de Janeiro", "Minas Gerais"]:
-            def run(dest=dest):
+        for dest in ["Salvador","Rio de Janeiro","Minas Gerais"]:
+            def run(d=dest):
                 try:
                     conn = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
                     ch = conn.channel()
-                    ch.queue_declare(queue=f"promocoes-{dest}")
-                    for _, _, body in ch.consume(queue=f"promocoes-{dest}", auto_ack=True):
-                        msg = "Minas não tem mar, bobo(a)!" if dest == "Minas Gerais" else body.decode()
-                        promos.appendleft(f"{dest}: {msg}")
+                    ch.queue_declare(queue=f"promocoes-{d}")
+                    for _,_,body in ch.consume(queue=f"promocoes-{d}", auto_ack=True):
+                        data['promos'].appendleft(body.decode())
                 except:
-                    promos.appendleft(f"[Erro] Falha nas promoções de {dest}")
+                    data['promos'].appendleft(f"[ERRO promo] {d}")
             threading.Thread(target=run, daemon=True).start()
 
     def consume_payments(self):
-        def run(queue, status):
+        def run(status):
             try:
                 conn = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
                 ch = conn.channel()
-                ch.queue_declare(queue=queue)
-                for _, _, body in ch.consume(queue=queue, auto_ack=True):
-                    data = json.loads(body)
-                    res_id = data["data"]["reserva_id"]
-                    payments.appendleft(f"{res_id} {status}")
-                    add_log(f"{'✅' if status == 'Aprovado' else '❌'} Pagamento: {res_id}")
-            except:
-                add_log(f"[Erro] Falha em {queue}")
-        threading.Thread(target=run, args=("pagamento-aprovado", "Aprovado"), daemon=True).start()
-        threading.Thread(target=run, args=("pagamento-recusado", "Recusado"), daemon=True).start()
+                # bind em exchange 'pagamento'
+                ch.exchange_declare(exchange='pagamento', exchange_type='direct')
+                q = ch.queue_declare(queue='', exclusive=True).method.queue
+                ch.queue_bind(exchange='pagamento', queue=q, routing_key=f'pagamento-{status}')
+                for _,_,body in ch.consume(queue=q, auto_ack=True):
+                    env = json.loads(body)
+                    rid = env['data']['reserva_id']
+                    data['reservas'].setdefault(rid, {'payment':None,'ticket':None})
+                    data['reservas'][rid]['payment'] = status.capitalize()
+                    add_log(f"{'✅' if status=='aprovado' else '❌'} Pagamento: {rid}")
+            except Exception as e:
+                add_log(f"[ERRO pagamento] {e}")
+        threading.Thread(target=run, args=("aprovado",), daemon=True).start()
+        threading.Thread(target=run, args=("recusado",), daemon=True).start()
 
-    def send_reservation(self, itinerary_id, passengers, cabins):
+    def consume_tickets(self):
         try:
             conn = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
             ch = conn.channel()
-            ch.queue_declare(queue="reserva-criada")
-            res_id = str(int(time.time() * 1000))
-            payload = {
-                "reserva_id": res_id,
-                "itinerario_id": itinerary_id,
-                "passageiros": passengers,
-                "cabines": cabins
-            }
-            ch.basic_publish(exchange='', routing_key="reserva-criada", body=json.dumps(payload))
-            add_log(f"📤 Reserva enviada: {res_id}")
+            ch.queue_declare(queue="bilhete-gerado")
+            for _,_,body in ch.consume(queue="bilhete-gerado", auto_ack=True):
+                info = json.loads(body)
+                rid = info['reserva_id']
+                tid = info['bilhete_id']
+                dest = info.get('destino','')
+                data['reservas'].setdefault(rid, {'payment':None,'ticket':None})
+                data['reservas'][rid]['ticket'] = (tid, dest)
+                add_log(f"🎟️ Bilhete gerado: {tid} para {rid}")
         except Exception as e:
-            add_log(f"❗ Erro ao reservar: {e}")
+            add_log(f"[ERRO bilhete] {e}")
+
+    def send_reservation(self, itin, pax, cab):
+        try:
+            rid = str(int(time.time()*1000))
+            data['reservas'][rid] = {'payment':None,'ticket':None}
+            payload = {"reserva_id":rid,"itinerario_id":itin,"passageiros":pax,"cabines":cab}
+            conn = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
+            ch = conn.channel()
+            ch.queue_declare(queue="reserva-criada")
+            ch.basic_publish(exchange='', routing_key="reserva-criada", body=json.dumps(payload))
+            add_log(f"📤 Reserva enviada: {rid}")
+        except Exception as e:
+            add_log(f"[ERRO reservar] {e}")
 
 if __name__ == "__main__":
     CruiseDashboard().run()
