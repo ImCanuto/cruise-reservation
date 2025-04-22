@@ -1,8 +1,12 @@
+import os
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 # Gera par de chaves RSA para MS Pagamento
 def generate_and_save_keys():
+    # Cria a pasta 'keys' se ela não existir
+    os.makedirs("keys", exist_ok=True)
+
     private_key = rsa.generate_private_key(
         public_exponent=65537,
         key_size=2048,
