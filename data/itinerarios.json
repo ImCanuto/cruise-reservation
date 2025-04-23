@@ -1,6 +1,6 @@
 [
     {
-      "id": "ITN001",
+      "id": "salvador",
       "destino": "Salvador",
       "data_partida": "2025-06-10",
       "navio": "Navio Bahiano",
@@ -11,7 +11,7 @@
       "valor_por_pessoa": 1500.00
     },
     {
-      "id": "ITN002",
+      "id": "rio",
       "destino": "Rio de Janeiro",
       "data_partida": "2025-07-20",
       "navio": "Carioca Star",

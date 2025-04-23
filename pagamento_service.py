@@ -20,6 +20,7 @@ print("[MS Pagamento] Aguardando reservas...")
 def callback(ch_, method, props, body):
     msg = json.loads(body)
     res_id = msg['reserva_id']
+    # randomiza o pagamento (aprovado ou recusado)
     approved = random.choice([True, False])
     data = {
         'reserva_id': res_id,
