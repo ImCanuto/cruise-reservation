@@ -4,7 +4,7 @@ from rich.panel import Panel
 import pika, json, threading, time
 from collections import deque
 
-RABBIT_HOST = "localhost"
+RABBIT_HOST = "localhost" # era do docker
 
 # estado global
 data = {
@@ -88,6 +88,7 @@ class CruiseDashboard(App):
         for dest in ["Salvador","Rio de Janeiro","Minas Gerais"]:
             def run(d=dest):
                 try:
+                    # conexão e canal para cada destino
                     conn = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
                     ch = conn.channel()
                     ch.queue_declare(queue=f"promocoes-{d}")
@@ -100,6 +101,7 @@ class CruiseDashboard(App):
     def consume_payments(self):
         def run(status):
             try:
+                # conexão e canal para os pagamentos
                 conn = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
                 ch = conn.channel()
                 # bind em exchange 'pagamento'

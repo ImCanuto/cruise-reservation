@@ -36,12 +36,12 @@ def callback(ch_, method, props, body):
         padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
         hashes.SHA256()
     )
-
+    #gera o bilhete
     res_id = data['reserva_id']
     itin_id = data.get('itinerario_id')
     destino = next((it['destino'] for it in itinerarios if it['id'] == itin_id), 'Desconhecido')
     bil_id = str(uuid.uuid4())
-
+    #publica o bilhete
     payload = {'reserva_id': res_id, 'bilhete_id': bil_id, 'destino': destino}
     ch.basic_publish(exchange='', routing_key='bilhete-gerado', body=json.dumps(payload))
     print(f"[x] Bilhete gerado para {res_id}: {bil_id} ({destino})")
