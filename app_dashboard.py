@@ -123,11 +123,16 @@ class CruiseDashboard(App):
         def run(status):
             try:
 # define o endereço do servidor RabbitMQ
+                # estabelece conexão com o servidor RabbitMQ
                 conn = pika.BlockingConnection(pika.ConnectionParameters(RABBIT_HOST))
                 ch = conn.channel()
+                # exchange direct do pagamento
                 ch.exchange_declare(exchange='pagamento', exchange_type='direct')
+                # fila exclusiva
                 q = ch.queue_declare(queue='', exclusive=True).method.queue
+                # conecta ao exchange 'pagamento' escutando apenas o tipo de pagamento definido (aprovado ou recusado)
                 ch.queue_bind(exchange='pagamento', queue=q, routing_key=f'pagamento-{status}')
+                # começa a consumir mensagens da fila
                 for _, _, body in ch.consume(queue=q, auto_ack=True):
                     envelope = json.loads(body)
                     data_msg = envelope['data']
@@ -142,6 +147,7 @@ class CruiseDashboard(App):
                             padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
                             hashes.SHA256()
                         )
+                        # se a assinatura for válida atualiza o estado da reserva
                         data['reservas'].setdefault(rid, {'payment': None, 'ticket': None})
                         data['reservas'][rid]['payment'] = status.capitalize()
                         icon = '✅' if status == 'aprovado' else '❌'
@@ -150,6 +156,7 @@ class CruiseDashboard(App):
                         add_log(f"⚠️ Assinatura inválida para {rid}: {e}")
             except Exception as e:
                 add_log(f"[ERRO pagamento] {e}")
+        # duas threads, uma para cada status de pagamento
         threading.Thread(target=run, args=("aprovado",), daemon=True).start()
         threading.Thread(target=run, args=("recusado",), daemon=True).start()
 
@@ -171,7 +178,7 @@ class CruiseDashboard(App):
         except Exception as e:
             add_log(f"[ERRO bilhete] {e}")
 
-# Envia uma nova reserva para a fila 'reserva-criada'
+# envia uma nova reserva para a fila 'reserva-criada'
     def send_reservation(self, itin, pax, cab):
         try:
             rid = str(int(time.time()*1000))
